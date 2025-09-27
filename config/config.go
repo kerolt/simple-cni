@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultSubnetFile = "/run/simple-cni/subnets.json"
+	DefaultSubnetFile = "/var/lib/simple-cni/subnets.json"
 	DefaultBridgeName = "simple-cni0"
 )
 
