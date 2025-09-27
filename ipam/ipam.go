@@ -53,6 +53,10 @@ func (ipam *IPAM) Mask() net.IPMask {
 	return ipam.subnet.Mask
 }
 
+func (ipam *IPAM) IPNet(ip net.IP) *net.IPNet {
+	return &net.IPNet{IP: ip, Mask: ipam.Mask()}
+}
+
 func (ipam *IPAM) Gateway() net.IP {
 	return ipam.gateway
 }
