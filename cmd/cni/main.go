@@ -10,10 +10,10 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 
-	"github.com/kerolt/simple-cni/bridge"
-	"github.com/kerolt/simple-cni/config"
-	"github.com/kerolt/simple-cni/ipam"
-	"github.com/kerolt/simple-cni/store"
+	"github.com/kerolt/simple-cni/pkg/bridge"
+	"github.com/kerolt/simple-cni/pkg/config"
+	"github.com/kerolt/simple-cni/pkg/ipam"
+	"github.com/kerolt/simple-cni/pkg/store"
 )
 
 const (

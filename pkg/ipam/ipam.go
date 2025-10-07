@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/kerolt/simple-cni/config"
-	"github.com/kerolt/simple-cni/store"
+	"github.com/kerolt/simple-cni/pkg/config"
+	"github.com/kerolt/simple-cni/pkg/store"
 
 	cip "github.com/containernetworking/plugins/pkg/ip"
 )
