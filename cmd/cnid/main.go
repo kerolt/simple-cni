@@ -38,12 +38,14 @@ type daemonConf struct {
 	clusterCIDR    string // 集群 CIDR
 	nodeName       string // 节点名称
 	enableIptables bool   // 是否启用 iptables 规则
+	useNftables    bool   // 是否使用 nftables（优先于 iptables）
 }
 
 func (d *daemonConf) addFlags() {
 	flag.StringVar(&d.clusterCIDR, "cluster-cidr", "", "Cluster CIDR")
 	flag.StringVar(&d.nodeName, "node-name", "", "Node Name")
 	flag.BoolVar(&d.enableIptables, "enable-iptables", false, "Enable iptables")
+	flag.BoolVar(&d.useNftables, "use-nftables", false, "Use nftables instead of iptables")
 }
 
 // 解析并验证配置参数
@@ -242,7 +244,7 @@ func newReconciler(conf *daemonConf, mgr manager.Manager) (*reconciler, error) {
 		return nil, err
 	}
 
-	// 如果启用了 iptables
+	// 设置防火墙转发与 NAT 规则
 	if conf.enableIptables {
 		if err := addIPTables(subnetConf.Bridge, hostLink.Attrs().Name, subnetConf.Subnet); err != nil {
 			return nil, err
@@ -279,16 +281,33 @@ func addIPTables(bridgeName, hostDeviceName, nodeCIDR string) error {
 		return err
 	}
 
-	// 凡是进入本机、入口网卡是创建的 CNI 网桥的转发流量允许被继续转发（不被默认策略 DROP）
-	if err := ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-j", "ACCEPT"); err != nil {
-		return err
+	// 规则顺序很重要：某些环境默认 FORWARD 策略为 DROP，需在链前部插入放行规则
+	// 1) 允许已建立&相关连接的转发流量
+	if exists, _ := ipt.Exists("filter", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"); !exists {
+		if err := ipt.Insert("filter", "FORWARD", 1, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"); err != nil {
+			return err
+		}
+	}
+	// 2) 允许来自 CNI 网桥发起的转发
+	if exists, _ := ipt.Exists("filter", "FORWARD", "-i", bridgeName, "-j", "ACCEPT"); !exists {
+		if err := ipt.Insert("filter", "FORWARD", 1, "-i", bridgeName, "-j", "ACCEPT"); err != nil {
+			return err
+		}
+	}
+	// 3) 允许转发到 CNI 网桥（回程）
+	if exists, _ := ipt.Exists("filter", "FORWARD", "-o", bridgeName, "-j", "ACCEPT"); !exists {
+		if err := ipt.Insert("filter", "FORWARD", 1, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
+			return err
+		}
+	}
+	// 4) 允许来自主机物理接口（如 eth0）的转发（可选，增强兼容性）
+	if exists, _ := ipt.Exists("filter", "FORWARD", "-i", hostDeviceName, "-j", "ACCEPT"); !exists {
+		if err := ipt.Insert("filter", "FORWARD", 1, "-i", hostDeviceName, "-j", "ACCEPT"); err != nil {
+			return err
+		}
 	}
 
-	// 允许来自主机物理接口（例如 eth0）的转发包被继续处理
-	if err := ipt.AppendUnique("filter", "FORWARD", "-i", hostDeviceName, "-j", "ACCEPT"); err != nil {
-		return err
-	}
-
+	// NAT：将来自本节点 Pod 网段的出站流量做 MASQUERADE
 	if err := ipt.AppendUnique("nat", "POSTROUTING", "-s", nodeCIDR, "-j", "MASQUERADE"); err != nil {
 		return err
 	}
