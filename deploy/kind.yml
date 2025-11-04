@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  # 禁止默认的CNI
+  disableDefaultCNI: true
+nodes:
+  # 包括一个master节点，三个worker
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

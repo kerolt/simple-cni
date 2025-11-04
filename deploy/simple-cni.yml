@@ -1,0 +1,171 @@
+# 授予插件 读取 Kubernetes 节点 (nodes) 信息的权限 (list, get, watch 动词)。CNI 插件通常需要这些权限来获取节点信息，例如为 Pod 分配 IP 所需的子网范围。
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: simplecni
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - list
+      - get
+      - watch
+---
+# 将上面的 ClusterRole 绑定到名为 simplecni 的 ServiceAccount 上，使其在 kube-system 命名空间中具有相应的权限。
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: simplecni
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplecni
+subjects:
+  - kind: ServiceAccount
+    name: simplecni
+    namespace: default
+---
+# 为 CNI 插件的 Pod 提供一个身份
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: simplecni
+  namespace: default
+---
+# CNI 配置文件
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: simplecni-cfg
+  namespace: default
+  labels:
+    tier: node
+    app: simplecni
+data:
+  cni-conf.json: |
+    {
+      "name": "simple-cni",
+      "cniVersion": "0.4.0",
+      "type": "simple-cni",
+      "dataDir": "/var/lib/cni/networks"
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: simplecni-ds
+  namespace: default
+  labels:
+    tier: node
+    app: simplecni
+spec:
+  selector:
+    matchLabels:
+      app: simplecni
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: simplecni
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
+      hostNetwork: true # Pod 使用宿主网络命名空间（访问主机网络）
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      serviceAccountName: simplecni
+
+      # 初始化容器：负责将 CNI 插件二进制文件和配置文件复制到主机的相应目录中
+      initContainers:
+        - name: install-cni-plugin
+          image: kerolt/simplecni:v0.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - cp
+          args:
+            - -f
+            - /simple-cni
+            - /opt/cni/bin/simple-cni
+          volumeMounts:
+            - name: cni-plugin
+              mountPath: /opt/cni/bin
+        - name: install-cni-config
+          image: kerolt/simplecni:v0.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - cp
+          args:
+            - -f
+            - /etc/simple-cni/cni-conf.json
+            - /etc/cni/net.d/00-simplecni.conf
+          volumeMounts:
+            - name: cni
+              mountPath: /etc/cni/net.d
+            - name: simplecni-cfg
+              mountPath: /etc/simple-cni/
+
+      # 启动 CNI DaemonSet 主容器
+      containers:
+        - name: simplecni
+          image: kerolt/simplecni:v0.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - /simple-cnid
+          args:
+            - --cluster-cidr=10.244.0.0/16
+            - --node-name=$(NODE_NAME)
+            - --enable-iptables
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "50Mi"
+            limits:
+              cpu: "100m"
+              memory: "50Mi"
+          securityContext:
+            privileged: false
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: run
+              mountPath: /run/simple-cni
+            - name: simplecni-cfg
+              mountPath: /etc/simple-cni/
+            - name: cni-state
+              mountPath: /var/lib/cni/networks
+      volumes:
+        - name: run
+          hostPath:
+            path: /run/simple-cni
+            type: DirectoryOrCreate
+        - name: cni-plugin
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: cni-state
+          hostPath:
+            path: /var/lib/cni/networks
+            type: DirectoryOrCreate
+        - name: simplecni-cfg
+          configMap:
+            name: simplecni-cfg
